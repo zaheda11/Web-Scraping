@@ -1,0 +1,80 @@
+!pip install flask pyngrok requests beautifulsoup4 > /dev/null
+
+from flask import Flask, request
+from bs4 import BeautifulSoup
+import requests, pandas as pd
+from pyngrok import ngrok
+
+# --- Flask App Setup ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return """
+    <h2>💻 Amazon Laptop Scraper</h2>
+    <form action="/scrape" method="post">
+        <input name="query" placeholder="Enter product name" style="width:250px; padding:8px;">
+        <button type="submit" style="padding:8px;">Search</button>
+    </form>
+    """
+
+@app.route('/scrape', methods=['POST'])
+def scrape():
+    query = request.form.get('query')
+    url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    print(f"🔎 Scraping URL: {url}")  # shows in Colab logs
+
+    response = requests.get(url, headers=headers)
+    html = response.text
+
+    # Print first 500 chars to debug
+    print("\n--- HTML PREVIEW START ---")
+    print(html[:500])
+    print("\n--- HTML PREVIEW END ---")
+
+    soup = BeautifulSoup(html, "html.parser")
+    products = []
+
+    for item in soup.select("div[data-component-type='s-search-result']"):
+        title = item.h2.text.strip() if item.h2 else "No title"
+        price_elem = item.select_one("span.a-price-whole")
+        price = price_elem.text.strip() if price_elem else "N/A"
+        link = "https://www.amazon.in" + item.h2.a["href"] if item.h2 and item.h2.a else "#"
+        products.append({"title": title, "price": price, "link": link})
+
+    # Show how many found
+    print(f"✅ Found {len(products)} products")
+
+    if not products:
+        return f"<h3>❌ No products found for '{query}'.<br>Amazon may be blocking the request.</h3>"
+
+    # Create a small HTML table
+    html_table = "<table border='1' cellpadding='6' style='border-collapse:collapse;'>"
+    html_table += "<tr><th>Title</th><th>Price</th><th>Link</th></tr>"
+    for p in products[:10]:
+        html_table += f"<tr><td>{p['title']}</td><td>{p['price']}</td><td><a href='{p['link']}' target='_blank'>View</a></td></tr>"
+    html_table += "</table>"
+
+    # Save results to CSV
+    df = pd.DataFrame(products)
+    df.to_csv("amazon_results.csv", index=False)
+
+    return f"<h3>✅ Found {len(products)} products for '{query}'</h3>" + html_table + "<br><br><a href='/download'>⬇️ Download CSV</a>"
+
+@app.route('/download')
+def download():
+    return open("amazon_results.csv").read()
+
+# --- Expose via ngrok ---
+ngrok.kill()  # kill old tunnels
+public_url = ngrok.connect(5000)
+print("🌐 Open this public link in your browser:\n", public_url)
+
+app.run(port=5000).
